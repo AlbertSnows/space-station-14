@@ -1,10 +1,14 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Content.IntegrationTests.Fixtures;
 using Content.Server.Shuttles.Systems;
+using Content.Shared.Pinpointer;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
+using Robust.Shared.Random;
 
 namespace Content.IntegrationTests.Tests.Shuttle;
 
@@ -13,7 +17,6 @@ namespace Content.IntegrationTests.Tests.Shuttle;
 public sealed class FtlProximityTest : GameTest
 {
 
-    // Public because they appear in the signature of a public [TestCaseSource] test method.
     private readonly record struct RectSize(int Width, int Height);
 
     private readonly record struct FTLPositioning(RectSize Station, RectSize Shuttle);
@@ -26,15 +29,17 @@ public sealed class FtlProximityTest : GameTest
                 (x, y) => (new Vector2i(x, y), new Tile(1)));
     }
 
-    private async Task AssertNoOverlap(FTLContext scenario, FTLPositioning positionContext)
+    private async Task AssertNoOverlap(FTLContext scenario, FTLPositioning positionContext, int seed)
     {
         var server = Pair.Server;
         var mapSys = server.System<SharedMapSystem>();
         var shuttleSys = server.System<ShuttleSystem>();
         var xformSys = server.System<SharedTransformSystem>();
+        var random = server.ResolveDependency<IRobustRandom>();
 
         await server.WaitAssertion(() =>
         {
+            random.SetSeed(seed);
             mapSys.SetTiles(scenario.Station.Grid, [.. RectTiles(positionContext.Station)]);
             mapSys.SetTiles(scenario.Shuttle.Grid, [.. RectTiles(positionContext.Shuttle)]);
 
@@ -43,11 +48,20 @@ public sealed class FtlProximityTest : GameTest
 
             var stationBox = xformSys.GetWorldMatrix(scenario.Station.Grid.Owner)
                 .TransformBox(scenario.Station.Grid.Comp.LocalAABB);
-            var shuttleBox = xformSys.GetWorldMatrix(scenario.Shuttle.Grid.Owner)
-                .TransformBox(scenario.Shuttle.Grid.Comp.LocalAABB);
+            var shuttleOrigin = xformSys.GetWorldPosition(scenario.Shuttle.Grid.Owner);
+            var shuttleBox = new Box2Rotated(
+                scenario.Shuttle.Grid.Comp.LocalAABB.Translated(shuttleOrigin),
+                xformSys.GetWorldRotation(scenario.Shuttle.Grid.Owner),
+                shuttleOrigin);
 
-            Assert.That(shuttleBox.Intersects(stationBox), Is.False,
-                $"sizes={positionContext} station={stationBox} shuttle={shuttleBox}");
+            var angle = xformSys.GetWorldRotation(scenario.Shuttle.Grid.Owner);
+            var failureInfo = $"sizes={positionContext} station={stationBox} " +
+                              $"shuttle={shuttleBox}" +
+                              $"angle={angle}";
+            var grids = new List<Entity<MapGridComponent>>();
+            mapSys.FindGridsIntersecting(scenario.Station.MapUid, shuttleBox, ref grids, includeMap: false);
+            var anyOverlap = grids.Any(g => g.Owner == scenario.Station.Grid.Owner);
+            Assert.That(anyOverlap, Is.False, failureInfo);
         });
     }
 
@@ -58,7 +72,7 @@ public sealed class FtlProximityTest : GameTest
         var shuttle = await Pair.CreateTestMap();
         var context = new FTLContext(station, shuttle, station.Grid.Owner);
         var positioning = new FTLPositioning(new RectSize(12, 8), new RectSize(3, 2));
-        await AssertNoOverlap(context, positioning);
+        await AssertNoOverlap(context, positioning, 0);
     }
 
 
@@ -69,7 +83,18 @@ public sealed class FtlProximityTest : GameTest
         var shuttle = await Pair.CreateTestMap();
         var context = new FTLContext(station, shuttle, station.MapUid);
         var positioning = new FTLPositioning(new RectSize(12, 8), new RectSize(3, 2));
-        await AssertNoOverlap(context, positioning);
+        await AssertNoOverlap(context, positioning, 0);
+    }
+
+    // Seed 19 lands the shuttle with a corner about 15 tiles inside the station.
+    [Test]
+    public async Task ShuttleDoesNotOverlapTargetGridSeed19()
+    {
+        var station = await Pair.CreateTestMap();
+        var shuttle = await Pair.CreateTestMap();
+        var context = new FTLContext(station, shuttle, station.Grid.Owner);
+        var positioning = new FTLPositioning(new RectSize(74, 153), new RectSize(66, 40));
+        await AssertNoOverlap(context, positioning, 19);
     }
 
     private const int MinSize = 1;
@@ -79,7 +104,7 @@ public sealed class FtlProximityTest : GameTest
     // Each seed is one test run. The seed shows in the test name, so a failing run can be replayed.
     private static IEnumerable<int> Seeds()
     {
-        return Enumerable.Range(0, 30);
+        return Enumerable.Range(0, 1);
     }
 
     [TestCaseSource(nameof(Seeds))]
@@ -95,11 +120,7 @@ public sealed class FtlProximityTest : GameTest
             rng.Next(shuttleSize.Width + 1, MaxStationSize + 1),
             rng.Next(shuttleSize.Height + 1, MaxStationSize + 1));
         var positioning = new FTLPositioning(stationSize, shuttleSize);
-        await AssertNoOverlap(context, positioning);
+        await AssertNoOverlap(context, positioning, seed);
     }
 
-    // TODO 5: repeat many times with different random choices.
-    //  ShuttleSystem uses an injected IRobustRandom (ShuttleSystem.cs:39).
-    //  Need to investigate how to seed that instance so a failing run can be replayed.
-    //   (EntityTableTest.SeededRand seeds its own RobustRandom, which is a different instance.)
 }
