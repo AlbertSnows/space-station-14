@@ -788,12 +788,12 @@ public sealed partial class ShuttleSystem
 
         // How much we expand the target AABB be.
         // We half it because we only need the width / height in each direction if it's placed at a particular spot.
-        var shuttleMaxHalfExtent = MathF.Max(shuttleLocalBox.Width / 2f, shuttleLocalBox.Height / 2f);
+        var shuttleDistanceToCorner = shuttleLocalBox.Size.Length() / 2f;
 
         // Expand the starter AABB so we have something to query to start with.
         var keepOutWorldBox = _transform.GetWorldMatrix(targetXform)
             .TransformBox(targetLocalPointBox)
-            .Enlarged(shuttleMaxHalfExtent);
+            .Enlarged(shuttleDistanceToCorner);
 
         var searchPass = 0;
         // We essentially expand the Box2 of the target area until nothing else is added then we know it's valid.
@@ -809,7 +809,7 @@ public sealed partial class ShuttleSystem
             // We pass in an expanded offset here so we can safely do a random offset later.
             // We don't include this in the actual keepOutWorldBox because then we would be double-expanding it.
             // Once in this loop, then again when placing the shuttle later.
-            // Note that keepOutWorldBox already has shuttleMaxHalfExtent factored in already.
+            // Note that keepOutWorldBox already has shuttleDistanceToCorner factored in already.
             Maps.FindGridsIntersecting(mapId, keepOutWorldBox.Enlarged(maxOffset), ref grids);
 
             foreach (var grid in grids)
@@ -820,7 +820,7 @@ public sealed partial class ShuttleSystem
                 // Include the other grid's AABB (expanded by ours) as well.
                 keepOutWorldBox = keepOutWorldBox.Union(
                     _transform.GetWorldMatrix(grid)
-                    .TransformBox(_mapGridQuery.Comp(grid).LocalAABB.Enlarged(shuttleMaxHalfExtent)));
+                    .TransformBox(_mapGridQuery.Comp(grid).LocalAABB.Enlarged(shuttleDistanceToCorner)));
             }
 
             // Can do proximity
@@ -845,7 +845,7 @@ public sealed partial class ShuttleSystem
 
                 keepOutWorldBox = keepOutWorldBox.Union(
                     _transform.GetWorldMatrix(uid)
-                    .TransformBox(_mapGridQuery.Comp(uid).LocalAABB.Enlarged(shuttleMaxHalfExtent)));
+                    .TransformBox(_mapGridQuery.Comp(uid).LocalAABB.Enlarged(shuttleDistanceToCorner)));
             }
 
             break;
@@ -866,9 +866,10 @@ public sealed partial class ShuttleSystem
         if (gridsInKeepOutBox.Count > 1 || !targetGridIsAlsoMap)
         {
             var offsetAngle = _random.NextAngle();
-            // Our valid spawn positions are <keepOutWorldBox width / height +  offset> away.
-            var keepOutHalfExtent = MathF.Max(keepOutWorldBox.Width / 2f, keepOutWorldBox.Height / 2f);
-            shuttleCenterWorldPos = keepOutWorldBox.Center + offsetAngle.RotateVec(new Vector2(_random.NextFloat(keepOutHalfExtent + minOffset, keepOutHalfExtent + maxOffset), 0f));
+            // length is the hypotenuse
+            var distanceFromCenterToCorner = keepOutWorldBox.Size.Length() / 2f;
+            var arrivalDistance = _random.NextFloat(distanceFromCenterToCorner + minOffset, distanceFromCenterToCorner + maxOffset);
+            shuttleCenterWorldPos = keepOutWorldBox.Center + offsetAngle.RotateVec(new Vector2(arrivalDistance, 0f));
         }
         else if (shuttleBody != null)
         {
@@ -888,7 +889,7 @@ public sealed partial class ShuttleSystem
         var shuttleOriginWorldPos = Robust.Shared.Physics.Transform.Mul(shuttleCenterPose, shuttleLocalCenterToOrigin);
 
         // An entity's position is calculated from its origin.
-        coordinates = new EntityCoordinates(targetXform.MapUid.Value, shuttleOriginWorldPos - shuttleLocalCenterToOrigin);
+        coordinates = new EntityCoordinates(targetXform.MapUid.Value, shuttleOriginWorldPos);
         return true;
     }
 
